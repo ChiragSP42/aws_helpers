@@ -96,7 +96,7 @@ class BatchInference():
             bucket_name (str): S3 bucket name.
             folder_name (str): Folder where files are present to ingest.
             output_folder (str): Output folder name/path (it should already exist).
-            moel_id (str): Inference profile ID of model that allows batch inferencing. 
+            model_id (str): Inference profile ID of model that allows batch inferencing. 
                            Check Service Quotas in AWS console for more information.
             creation_prompt (str): System prompt for each record.
             role_arn (str): ARN of role that allows batch inferencing job. For more info refer
