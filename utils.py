@@ -160,7 +160,7 @@ class BatchInference():
 
         return response['jobArn']
     
-    def poll_invocation_job(self, jobArn: Optional[str]=None):
+    def poll_invocation_job(self, jobArn: Optional[str]=None) -> Optional[bool]:
         """Function to poll the status of the model invocation job.
 
         Parameters:
@@ -203,3 +203,54 @@ class BatchInference():
         # If you're trying to poll nothing.
         elif not jobArn and not hasattr('self', 'jobArn'):
             print("\x1b[31mEither enter ARN of batch inference job or first start a batch inference job and poll the same object\x1b[0m")
+
+    def process_batch_inference_output(self):
+        """
+        Function to post process the jsonl file after batch inference job. The outputs are stored as input.jsonl.out in 
+        the folder mentioned during inference job creation in the S3DataConfig parameter. The function looks at the first folder 
+        in the output folder. Modify the code as necessary.
+
+        Currently output JSON file is of the format;
+
+        {
+            "output": [
+                {
+                    "filename": <recordId>,
+                    "identifiers": <text>
+                }
+            ]
+        }
+
+        Parameters:
+            s3_client (Any): S3 client object.
+            bucket_name (str): S3 bucket name.
+            folder_name (str): Folder name containing output file.
+
+        Returns:
+        """
+        print("\x1b[31mProcessing output jsonl file\x1b[0m")
+
+        response_binary = self.s3_client.get_object(Bucket=self.bucket_name,
+                                        Key=os.path.join(self.folder_name, "input.jsonl.out"))["Body"]
+        
+        output_json_list = []
+        
+        for response in response_binary.iter_lines():
+            json_obj = json.loads(response.decode('utf-8'))
+            # print(json.dumps(json.loads(json_obj), indent = 2))
+            text = json_obj["modelOutput"]["content"][0]["text"]
+            record_id = json_obj["recordId"] # Contains the file name which may contain year, color, make, model info
+            output_json = {
+                "filename": record_id,
+                "unique_identifiers": text
+            }
+            output_json_list.append(output_json)
+        
+        output_json = {
+            "output": output_json_list
+        }
+        print("\x1b[32mProcessed JSONl file as a JSON file\x1b[0m")
+        print("\x1b[31mUploading JSON file\x1b[0m")
+        self.s3_client.put_object(Bucket=self.bucket_name,
+                            Key=os.path.join(self.folder_name, "output.json"))
+        print(f"\x1b[32mUploaded JSON file to S3 bucket of same directory {os.path.join(self.bucket_name, self.folder_name, 'output.json')}\x1b[0m")
