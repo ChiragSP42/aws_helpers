@@ -8,6 +8,8 @@ from helpers import (
 import json
 import base64
 import os
+import sys
+import time
 
 class BatchInference():
     def create_input_jsonl(self) -> None:
@@ -154,5 +156,50 @@ class BatchInference():
             roleArn=self.role_arn,
         )
         print(f"Model invocation job created with ARN: {response['jobArn']}")
+        self.jobArn = response['jobArn']
 
         return response['jobArn']
+    
+    def poll_invocation_job(self, jobArn: Optional[str]=None):
+        """Function to poll the status of the model invocation job.
+
+        Parameters:
+            jobArn (Optinal[str]): ARN of the model invocation job to poll.
+
+        Returns:
+            str: Status of the job.
+        """
+
+        # If you're polling a random batch inference job.
+        if jobArn:
+            counter = 0
+            while True:
+                status = self.bedrock_client.get_model_invocation_job(jobIdentifier=jobArn)['status']
+                dots = "." * (counter % 4)
+                sys.stdout.write(f"\r{status}{dots}".ljust(len(status) + 4))
+                sys.stdout.flush()
+                time.sleep(0.5)
+                counter += 1
+                if status == 'Completed':
+                    return True
+                elif status == 'Failed':
+                    return False
+                time.sleep(5)
+        # If batch inference was started and now polling the same object.
+        elif hasattr('self', 'jobArn'):
+            counter = 0
+            while True:
+                status = self.bedrock_client.get_model_invocation_job(jobIdentifier=self.jobArn)['status']
+                dots = "." * (counter % 4)
+                sys.stdout.write(f"\r{status}{dots}".ljust(len(status) + 4))
+                sys.stdout.flush()
+                time.sleep(0.5)
+                counter += 1
+                if status == 'Completed':
+                    return True
+                elif status == 'Failed':
+                    return False
+                time.sleep(5)
+        # If you're trying to poll nothing.
+        elif not jobArn and not hasattr('self', 'jobArn'):
+            print("\x1b[31mEither enter ARN of batch inference job or first start a batch inference job and poll the same object\x1b[0m")
