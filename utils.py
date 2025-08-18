@@ -2,7 +2,7 @@ from typing import (
     Any,
     Optional,
 )
-from helpers import (
+from .helpers import (
     list_obj_s3
 )
 import json
@@ -10,6 +10,7 @@ import base64
 import os
 import sys
 import time
+import pandas as pd
 
 class BatchInference():
     def create_input_jsonl(self) -> None:
@@ -39,7 +40,7 @@ class BatchInference():
             ]
 
             json_obj = {
-                "recordId": os.path.basename(image_filename),
+                "recordId": f"s3://{self.bucket_name}/{image_filename}",
                 "modelInput": {
                     "anthropic_version": "bedrock-2023-05-31",
                     "max_tokens": 1024,
@@ -57,7 +58,7 @@ class BatchInference():
         with open('input.jsonl', 'w') as f:
             for json_obj in input_json_file:
                 f.write(json.dumps(json_obj) + "\n")
-        print("\x1b[32mCreated JSONL file and store local copy as input.jsonl\x1b[0m")
+        print(f"\x1b[32mProcessed {len(list_of_images)} images and created JSONL file and store local copy as input.jsonl\x1b[0m")
         
         # Upload JSONL file to S3.
         try:
@@ -156,11 +157,10 @@ class BatchInference():
             roleArn=self.role_arn,
         )
         print(f"Model invocation job created with ARN: {response['jobArn']}")
-        self.jobArn = response['jobArn']
 
         return response['jobArn']
     
-    def poll_invocation_job(self, jobArn: Optional[str]=None) -> Optional[bool]:
+    def poll_invocation_job(self, jobArn: str) -> Optional[bool]:
         """Function to poll the status of the model invocation job.
 
         Parameters:
@@ -185,26 +185,11 @@ class BatchInference():
                 elif status == 'Failed':
                     return False
                 time.sleep(5)
-        # If batch inference was started and now polling the same object.
-        elif hasattr('self', 'jobArn'):
-            counter = 0
-            while True:
-                status = self.bedrock_client.get_model_invocation_job(jobIdentifier=self.jobArn)['status']
-                dots = "." * (counter % 4)
-                sys.stdout.write(f"\r{status}{dots}".ljust(len(status) + 4))
-                sys.stdout.flush()
-                time.sleep(0.5)
-                counter += 1
-                if status == 'Completed':
-                    return True
-                elif status == 'Failed':
-                    return False
-                time.sleep(5)
         # If you're trying to poll nothing.
         elif not jobArn and not hasattr('self', 'jobArn'):
             print("\x1b[31mEither enter ARN of batch inference job or first start a batch inference job and poll the same object\x1b[0m")
 
-    def process_batch_inference_output(self):
+    def process_batch_inference_output(self, local_copy: Optional[bool]=None):
         """
         Function to post process the jsonl file after batch inference job. The outputs are stored as input.jsonl.out in 
         the folder mentioned during inference job creation in the S3DataConfig parameter. The function looks at the first folder 
@@ -215,42 +200,85 @@ class BatchInference():
         {
             "output": [
                 {
-                    "filename": <recordId>,
+                    "s3_uri": <recordId>,
+                    "license_plate": <license plate number>,
+                    "year": <year>,
+                    "make": <make>,
+                    "model": <model>,
+                    "color": <color>,
                     "identifiers": <text>
                 }
             ]
         }
 
         Parameters:
-            s3_client (Any): S3 client object.
-            bucket_name (str): S3 bucket name.
-            folder_name (str): Folder name containing output file.
-
+            local_copy (Optional[bool]): Whether you can a local copy as a csv file.
         Returns:
         """
+        OUTPUT_FILENAME = 'created_data'
+
         print("\x1b[31mProcessing output jsonl file\x1b[0m")
 
+        list_folders_output = list_obj_s3(s3_client=self.s3_client,
+                               bucket_name=self.bucket_name,
+                               folder_name=self.output_folder,
+                               delimiter='/')[-1]
+        
         response_binary = self.s3_client.get_object(Bucket=self.bucket_name,
-                                        Key=os.path.join(self.folder_name, "input.jsonl.out"))["Body"]
+                                        Key=os.path.join(list_folders_output, "input.jsonl.out"))["Body"]
         
         output_json_list = []
-        
+        processed_counter = 0
+        success_counter = 0
+        failed_counter = 0
+        justOnce = False
         for response in response_binary.iter_lines():
-            json_obj = json.loads(response.decode('utf-8'))
+            processed_counter += 1
+            try:
+                json_obj = json.loads(response.decode('utf-8'))
+                text = json_obj["modelOutput"]["content"][0]["text"]
+                text = json.loads(text)
+                if not justOnce:
+                    print(text)
+                    justOnce = True
+                record_id = json_obj["recordId"] # Contains the filename
+                output_json = {
+                    "s3_uri": record_id,
+                    "license_plate": text.get("license_plate"),
+                    "year": text.get("year"),
+                    "make": text.get("make"),
+                    "model": text.get("model"),
+                    "color": text.get("color"),
+                    "car_type": text.get("car_type"),
+                    "unique_identifiers": text["unique_identifiers"]
+                }
+                output_json_list.append(output_json)
+                success_counter += 1
+            except Exception as e:
+                json_obj = json.loads(response.decode('utf-8'))
+                # text = json_obj["modelOutput"]["content"][0]["text"]
+                record_id = json_obj["recordId"] # Contains the filename
+                print(f"\x1b[31mJSON extraction failed for {json_obj['recordId']}\x1b[0m")
+                # print(text)
+
+                print(f"\x1b[31m{e}\x1b[0m")
+                failed_counter += 1
             # print(json.dumps(json.loads(json_obj), indent = 2))
-            text = json_obj["modelOutput"]["content"][0]["text"]
-            record_id = json_obj["recordId"] # Contains the file name which may contain year, color, make, model info
-            output_json = {
-                "filename": record_id,
-                "unique_identifiers": text
-            }
-            output_json_list.append(output_json)
+            
         
         output_json = {
             "output": output_json_list
         }
         print("\x1b[32mProcessed JSONl file as a JSON file\x1b[0m")
+        print(f"Processed: {processed_counter}\nSuccess: {success_counter}\nFailed: {failed_counter}")
         print("\x1b[31mUploading JSON file\x1b[0m")
         self.s3_client.put_object(Bucket=self.bucket_name,
-                            Key=os.path.join(self.folder_name, "output.json"))
-        print(f"\x1b[32mUploaded JSON file to S3 bucket of same directory {os.path.join(self.bucket_name, self.folder_name, 'output.json')}\x1b[0m")
+                            Key=os.path.join(list_folders_output, f"{OUTPUT_FILENAME}.json"),
+                            Body=json.dumps(output_json, indent = 2),
+                            ContentType='application/json')
+        print(f"\x1b[32mUploaded JSON file to S3 bucket of same directory {os.path.join(self.bucket_name, list_folders_output, f'{OUTPUT_FILENAME}.json')}\x1b[0m")
+
+        if local_copy:
+            df = pd.DataFrame(output_json['output'])
+            df.to_csv(f'{OUTPUT_FILENAME}.csv', index = False)
+            print("\x1b[32mCreated local copy as csv file\x1b[0m")
