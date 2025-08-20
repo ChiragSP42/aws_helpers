@@ -71,9 +71,9 @@ class BatchInference():
         try:
             print(f"\x1b[31mUploading input.jsonl file to S3 bucket at path {self.bucket_name}/input.jsonl\x1b[0m")
             with open('input.jsonl', 'rb') as f:
-                self.s3_client.put_object(Bucket=self.bucket_name,
+                self.s3_client.upload_fileobj(Bucket=self.bucket_name,
                                     Key='input.jsonl',
-                                    Body=f)
+                                    Fileobj=f)
             print("\x1b[32mUploaded file\x1b[0m")
         except Exception as e:
             print(e)
