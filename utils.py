@@ -10,6 +10,10 @@ import base64
 import os
 import sys
 import time
+import random
+from itertools import tee
+from PIL import Image
+from io import BytesIO
 import pandas as pd
 
 class BatchInference():
@@ -282,3 +286,80 @@ class BatchInference():
             df = pd.DataFrame(output_json['output'])
             df.to_csv(f'{OUTPUT_FILENAME}.csv', index = False)
             print("\x1b[32mCreated local copy as csv file\x1b[0m")
+
+class FineTuning():
+    def __init__(self, model: Any,
+                 processor: Any,
+                 config: Any,
+                 dataset: Any,
+                 batch_size: int,
+                 s3_client: Any,
+                 bucket_name: str,
+                 folder_name: str,
+                 ):
+        self.config = config
+        self.model = model
+        self.processor = processor
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.s3_client =s3_client
+        self.bucket_name = bucket_name
+        self.folder_name = folder_name
+
+        self.processed_dataset = self.dataset.map(self.preprocess, batched=True, batch_size=self.batch_size)
+
+    def preprocess(self, 
+                   examples: Any):
+        def load_images_from_s3(image_file_name):
+            """
+            Function to retrieve image from S3.
+            """
+
+            response = self.s3_client.get_object(Bucket=self.bucket_name,
+                                            Key=f"{self.folder_name}/{image_file_name}")
+            image_bytes = response["Body"].read()
+            image = Image.open(BytesIO(image_bytes)).convert("RGB")
+            return image
+
+        images = [load_images_from_s3(image) for image in examples["File_name"]]
+
+        preprocessed = self.processor(text=examples["Description"],
+                                images=images,
+                                padding='max_length',
+                                return_tensors='pt',
+                                truncation=True)
+
+        return {"input_ids": preprocessed['input_ids'],
+                "attention_mask": preprocessed['attention_mask'],
+                "pixel_values": preprocessed['pixel_values']
+            }
+    
+    def split(self, 
+              train_size: float=0.8,
+              seed: int=42,
+              ):
+        random.seed(seed)
+
+        # Generator function to yield train or test samples
+        def splitter(gen):
+            for sample in gen:
+                if random.random() > train_size:
+                    yield ("test", sample)
+                else:
+                    yield ("train", sample)
+
+        split_labeled = splitter(self.processed_dataset)
+
+        def filter_split(gen, split_label):
+            for label, sample in gen:
+                if label == split_label:
+                    yield sample
+
+        gen1, gen2 = tee(split_labeled)
+
+        train_dataset = filter_split(gen1, "train")
+        test_dataset = filter_split(gen2, "test")
+
+        return train_dataset, test_dataset
+
+        
