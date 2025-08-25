@@ -139,17 +139,45 @@ def _parse_arn(arn: str) -> Dict:
         print(f"ARN {arn} could not be parsed")
         sys.exit(0)
 
-def _local_or_sagemaker():
+def _local_or_sagemaker() -> bool:
     """
     Checks if the current Python script is running within an Amazon SageMaker environment or locally.
+    Returns True if running on SageMaker, False if running locally.
     """
     # As a fallback, check for other common SageMaker environment variables
     sagemaker_env_vars = ['SM_CHANNEL_TRAIN', 'SM_MODEL_DIR', 'SAGEMAKER_PROGRAM']
     for var in sagemaker_env_vars:
         if var in os.environ:
+            print(var)
             return True
 
     return False
+
+def _get_s3_client(aws_access_key: Optional[str]=None,
+                   aws_secret_key: Optional[str]=None,
+                   region_name: str='us-east-1'):
+    
+    if aws_access_key and aws_secret_key is None:
+        aws_access_key = os.getenv("AWS_ACCESS_KEY")
+        aws_secret_key = os.getenv("AWS_SECRET_KEY")
+        if aws_access_key and aws_secret_key is None:
+            raise ValueError("AWS credentials not set in environment.")
+        else:
+            session = boto3.Session(aws_access_key_id=aws_access_key,
+                                    aws_secret_access_key=aws_secret_key,
+                                    region_name=region_name)
+            
+            s3_client = session.client("s3")
+
+            return s3_client
+    else:
+        session = boto3.Session(aws_access_key_id=aws_access_key,
+                                    aws_secret_access_key=aws_secret_key,
+                                    region_name=region_name)
+            
+        s3_client = session.client("s3")
+
+        return s3_client
 
 def list_obj_s3(s3_client: Any,
                 bucket_name: Optional[str],
@@ -177,7 +205,7 @@ def list_obj_s3(s3_client: Any,
                                    Delimiter=delimiter):
         if delimiter:
             if 'CommonPrefixes' in page:
-                pdf_list = [obj["Prefix"] for obj in page.get('CommonPrefixes', [])]
+                obj_list = [obj["Prefix"] for obj in page.get('CommonPrefixes', [])]
         else:
             for obj in page.get('Contents', []):
                 key = obj['Key']
