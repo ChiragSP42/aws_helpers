@@ -156,6 +156,18 @@ def _local_or_sagemaker() -> bool:
 def _get_s3_client(aws_access_key: Optional[str]=None,
                    aws_secret_key: Optional[str]=None,
                    region_name: str='us-east-1'):
+    """
+    Function to generate S3 client object. Access keys are retrieved from .env by default.
+    If alternate keys can be provisioned via parameters. Default region name is 'us-east-1'.
+
+    Parameters:
+        aws_access_key (Optional[str]): AWS Access key ID.
+        aws_secret_key (Optional[str]): AWS Secret key ID.
+        region_name (str): Region name.
+
+    Returns:
+        S3 client object.
+    """
     
     if aws_access_key and aws_secret_key is None:
         aws_access_key = os.getenv("AWS_ACCESS_KEY")
