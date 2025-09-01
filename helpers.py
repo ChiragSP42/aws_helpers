@@ -5,7 +5,7 @@ from typing import (
     Any, 
     List, 
     Tuple)
-import json
+import logging
 import boto3
 import sys
 import traceback
@@ -155,6 +155,7 @@ def _local_or_sagemaker() -> bool:
 
 def _get_s3_client(aws_access_key: Optional[str]=None,
                    aws_secret_key: Optional[str]=None,
+                   config: Optional[Any]=None,
                    region_name: str='us-east-1'):
     """
     Function to generate S3 client object. Access keys are retrieved from .env by default.
@@ -178,8 +179,8 @@ def _get_s3_client(aws_access_key: Optional[str]=None,
             session = boto3.Session(aws_access_key_id=aws_access_key,
                                     aws_secret_access_key=aws_secret_key,
                                     region_name=region_name)
-            
-            s3_client = session.client("s3")
+        
+            s3_client = session.client("s3", config=config)
 
             return s3_client
     else:
@@ -187,9 +188,42 @@ def _get_s3_client(aws_access_key: Optional[str]=None,
                                     aws_secret_access_key=aws_secret_key,
                                     region_name=region_name)
             
-        s3_client = session.client("s3")
+        s3_client = session.client("s3", config=config)
 
         return s3_client
+    
+def _setup_logger(name: str, level: int, handler_type: str='stream', filename: Optional[str]=None):
+    """
+    Set up and return a logger with a given name and level.
+    
+    Parameters:
+        name (str): Name of logger
+        level (int): Level of logger like logging.DEBUG, loggin.INFO, etc.
+        handler_type (str): 'stream' for console output, 'file' for file output.
+        filename (Optional[str]): required if handler_type is 'file'.
+    """
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
+    
+    # Create handler based on type
+    if handler_type == 'stream':
+        handler = logging.StreamHandler()
+    elif handler_type == 'file':
+        if not filename:
+            raise ValueError("Filename must be provided for file handler")
+        handler = logging.FileHandler(filename)
+    else:
+        raise ValueError("Unknown handler_type. Use 'stream' or 'file'.")
+    
+    # Define formatter
+    formatter = logging.Formatter('%(filename)s:%(funcName)s:%(lineno)d - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    
+    # Avoid adding handlers multiple times if logger is configured more than once
+    if not logger.hasHandlers():
+        logger.addHandler(handler)
+    
+    return logger
 
 def list_obj_s3(s3_client: Any,
                 bucket_name: Optional[str],
