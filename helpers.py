@@ -198,7 +198,7 @@ def _setup_logger(name: str, level: int, handler_type: str='stream', filename: O
     
     Parameters:
         name (str): Name of logger
-        level (int): Level of logger like logging.DEBUG, loggin.INFO, etc.
+        level (int): Level of logger like logging.DEBUG=10, logging.INFO=20, logging.WARNING=30, logging.ERROR=40, logging.CRITICAL=50.
         handler_type (str): 'stream' for console output, 'file' for file output.
         filename (Optional[str]): required if handler_type is 'file'.
     """
