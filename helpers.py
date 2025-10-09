@@ -10,7 +10,7 @@ import boto3
 import sys
 import traceback
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 def _list_foundational_models(byOutputModality: Optional[str] = None,
                  byProvider: Optional[str] = None) -> None:
