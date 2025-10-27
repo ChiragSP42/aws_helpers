@@ -7,6 +7,7 @@ from typing import (
     Tuple)
 import logging
 import boto3
+import json
 import sys
 import traceback
 from dotenv import load_dotenv
@@ -90,6 +91,56 @@ def _list_inference_profiles() -> None:
     for profile in response.get('inferenceProfileSummaries', []):
         print(f"Profile Name: {profile['inferenceProfileName']}\nProfile ID: {profile['inferenceProfileId']}")
         print("-" * 30)
+
+def _count_tokens(model_id: str, body: str) -> int:
+    """
+    Function to count the number of input tokens before you actually pass it to the model. Here is an example of the body
+    for anthropic model.
+
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 4096,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hello world"
+            }
+        ]
+    })
+
+    Parameters:
+        model_id (str): Model ID of foundation models ONLY
+        body (str): Content that will be passed to model. Refer to above example.
+
+    Returns:
+        response['InputTokens'] (int): Returns the number of input tokens.
+    """
+    AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY", None)
+    AWS_SECRET_KEY = os.getenv("AWS_SECRET_KEY", None)
+
+    if not AWS_ACCESS_KEY or not AWS_SECRET_KEY:
+        raise ValueError("AWS credentials not found")
+
+    session = boto3.Session(
+        aws_access_key_id=AWS_ACCESS_KEY,
+        aws_secret_access_key=AWS_SECRET_KEY,
+        region_name='us-east-1'
+    )
+
+    bedrock_runtime = session.client("bedrock-runtime", region_name="us-east-1")
+
+    # Your text/context that you want to count tokens for
+
+    response = bedrock_runtime.count_tokens(
+        modelId=model_id,  # Claude 3.5 Sonnet v2
+        input={
+            "invokeModel": {
+                "body": body
+            }
+        }
+    )
+
+    return response['inputTokens']
 
 def _parse_arn(arn: str) -> Dict:
     """
