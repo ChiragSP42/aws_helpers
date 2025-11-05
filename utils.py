@@ -10,6 +10,7 @@ from .helpers import (
     _get_s3_client
 )
 import json
+import base64
 import os
 import sys
 import time
@@ -23,33 +24,69 @@ from PIL import Image
 from io import BytesIO
 import pandas as pd
 from datasets import Dataset
+import threading
+import itertools
 import concurrent.futures
 from threading import Semaphore
 import logging
+
+class Spinner:
+    def __init__(self, message="Loading...", delay=0.2):
+        self.spinner = itertools.cycle(['.', '..', '...', '....']) # You can customize these characters
+        self.delay = delay
+        self.running = False
+        self.spinner_thread = None
+        self.message = message
+
+    def _spin(self):
+        while self.running:
+            sys.stdout.write(f"\r{self.message} {next(self.spinner)}")
+            sys.stdout.flush()
+            time.sleep(self.delay)
+            sys.stdout.write('\r' + ' ' * (len(self.message) + 5)) # Clear the line
+
+    def start(self):
+        self.running = True
+        self.spinner_thread = threading.Thread(target=self._spin)
+        self.spinner_thread.daemon = True # Allow the main program to exit even if spinner is running
+        self.spinner_thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.spinner_thread:
+            self.spinner_thread.join() # Wait for the spinner thread to finish
+        sys.stdout.write('\r' + ' ' * (len(self.message) + 6) + '\r') # Clear the line completely
+        sys.stdout.flush()
 
 class BatchInference():
     def create_input_jsonl(self) -> None:
         """
         Function to create input.jsonl file for invoking the model. Check if the input.jsonl file already exists in the S3 bucket first.
         """
-        # Getting enriched questions (questions with context) to populate JSONL file.
-        response = self.s3_client.get_object(Bucket=self.bucket_name,
-                                                       Key=f"{self.folder_name}/enriched_questions.json")
         
-        enriched_questions = json.loads(response["Body"].read().decode('utf-8'))
+        list_of_images = list_obj_s3(s3_client=self.s3_client,
+                                    bucket_name=self.bucket_name,
+                                    folder_name=self.folder_name)
 
         input_json_file = []
-        for question in enriched_questions:
-            text_template = f"Context:\n{question['context']}\n\nQuestion:\n{question['question']}"
+        for image_filename in list_of_images:
+            image = self.s3_client.get_object(Bucket=self.bucket_name,
+                                            Key=image_filename)
+            image_binary = image["Body"].read()
+            image_bytes = base64.b64encode(image_binary).decode('utf-8')
             content = [
                 {
-                    "type": "text",
-                    "text": text_template
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": image_bytes
+                    }
                 }
             ]
 
             json_obj = {
-                "recordId": f"{question['section']}_{question['id']}",
+                "recordId": f"s3://{self.bucket_name}/{image_filename}",
                 "modelInput": {
                     "anthropic_version": "bedrock-2023-05-31",
                     "max_tokens": 1024,
@@ -67,14 +104,14 @@ class BatchInference():
         with open('input.jsonl', 'w') as f:
             for json_obj in input_json_file:
                 f.write(json.dumps(json_obj) + "\n")
-        print(f"\x1b[32mProcessed {len(enriched_questions)} questions and created JSONL file and store local copy as input.jsonl\x1b[0m")
+        print(f"\x1b[32mProcessed {len(list_of_images)} images and created JSONL file and store local copy as input.jsonl\x1b[0m")
         
         # Upload JSONL file to S3.
         try:
             print(f"\x1b[31mUploading input.jsonl file to S3 bucket at path {self.bucket_name}/input.jsonl\x1b[0m")
             with open('input.jsonl', 'rb') as f:
                 self.s3_client.upload_fileobj(Bucket=self.bucket_name,
-                                    Key=f'{self.folder_name}/input.jsonl',
+                                    Key='input.jsonl',
                                     Fileobj=f)
             print("\x1b[32mUploaded file\x1b[0m")
         except Exception as e:
@@ -124,35 +161,29 @@ class BatchInference():
         self.role_arn = role_arn
         self.job_name = job_name
 
-    def start_batch_inference_job(self, new_jsonl: bool) -> str:
+    def start_batch_inference_job(self) -> str:
         """
         Method to start batch inference job. First checks if input.jsonl file is present in S3 bucket or not.
         Creates a new one if it isn't present and starts the job.
 
-        Parameters:
-            new_jsonl (bool): If True, destroy old input.jsonl file and create new one.
-
         Returns:
             jobArn: ARN of batch inference job. Use this to poll status of job.
         """
-        if new_jsonl:
+        # Check if input.jsonl file exists or not first.
+        input_jsonl_yes_no = list_obj_s3(s3_client=self.s3_client,
+                                 bucket_name=self.bucket_name,
+                                 folder_name='input.jsonl')
+
+        if not input_jsonl_yes_no:
+            print("\x1b[31mInput jsonl file does not exist. Creating new one...\x1b[0m")
             self.create_input_jsonl()
         else:
-            # Check if input.jsonl file exists or not first.
-            input_jsonl_yes_no = list_obj_s3(s3_client=self.s3_client,
-                                    bucket_name=self.bucket_name,
-                                    folder_name=f'{self.folder_name}/input.jsonl')
-
-            if not input_jsonl_yes_no:
-                print("\x1b[31mInput jsonl file does not exist. Creating new one...\x1b[0m")
-                self.create_input_jsonl()
-            else:
-                print("\x1b[32mInput jsonl file already exists. No need to create a new one.\x1b[0m")
+            print("\x1b[32mInput jsonl file already exists. No need to create a new one.\x1b[0m")
 
         inputDataConfig = {
             "s3InputDataConfig": {
                 "s3InputFormat": "JSONL",
-                "s3Uri": f"s3://{self.bucket_name}/{self.folder_name}/input.jsonl"
+                "s3Uri": f"s3://{self.bucket_name}/input.jsonl"
             }
         }
 
