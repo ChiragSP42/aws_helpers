@@ -104,7 +104,7 @@ def _list_inference_profiles() -> None:
         print(f"Profile Name: {profile['inferenceProfileName']}\nProfile ID: {profile['inferenceProfileId']}")
         print("-" * 30)
 
-def _count_tokens(model_id: str, body: str) -> int:
+def _count_tokens(model_id: str, content: str, claude: bool = True) -> int:
     """
     Function to count the number of input tokens before you actually pass it to the model. Here is an example of the body
     for anthropic model.
@@ -142,15 +142,35 @@ def _count_tokens(model_id: str, body: str) -> int:
     bedrock_runtime = session.client("bedrock-runtime", region_name="us-east-1")
 
     # Your text/context that you want to count tokens for
-
-    response = bedrock_runtime.count_tokens(
-        modelId=model_id,  # Claude 3.5 Sonnet v2
-        input={
-            "invokeModel": {
-                "body": body
+    if claude == False:
+        response = bedrock_runtime.count_tokens(
+            modelId=model_id,  # Claude 3.5 Sonnet v2
+            input={
+                "invokeModel": {
+                    "body": content
+                }
             }
-        }
-    )
+        )
+    else:
+        body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 4096,
+        "messages": [
+                {
+                    "role": "user",
+                    "content": content
+                }
+            ]
+        })
+
+        response = bedrock_runtime.count_tokens(
+            modelId=model_id,  # Claude 3.5 Sonnet v2
+            input={
+                "invokeModel": {
+                    "body": body
+                }
+            }
+        )
 
     return response['inputTokens']
 
